@@ -8,6 +8,11 @@
  const live=p=>p.inGame!==false&&!p.eliminated&&!['eliminated','out','withdrawn'].includes(p.status);
  const fields=c=>c?.effective?.fields||c?.fields||{},text=c=>(c?.effective?.title||'')+'；'+(c?.effective?.effect||'');
  const securityKinds=['bonds','funds','securities'];
+ function ordinaryMarketOpportunity(c){
+  if(!c||c.eventType!=='MARKET_EVENT'||['詭譎市場','股東大會'].includes(c.category)||Array.isArray(c.eligibleTraders))return false;
+  const items=pricedItems(c,c.marketQuotes||fields(c)),effects=compileEffects(c,items);
+  return items.length>0&&!effects.globalMarketEffect.length&&!effects.playerSpecificEffect.length&&!effects.issues.length&&!items.some(i=>i.blockedSell||i.blockedBuy&&i.currentMarketPrice>0);
+ }
  function stockIndustry(a,byId){return a.industry||a.sector||byId.get(a.cardId)?.effective?.fields?.industry||byId.get(a.cardId)?.effective?.fields?.sector||null;}
  function positionUnits(a,kind,byId){
   if(kind==='futures')return Number.isSafeInteger(a.quantity)&&a.quantity>=0?a.quantity:Number.isSafeInteger(a.units)?a.units:null;
@@ -133,13 +138,8 @@
   const exempt=c.category==='詭譎市場'&&this.active.cash<=300000;
   if(exempt){issues.push('現金 30 萬以下，免翻詭譎市場卡；不翻後續行情、不執行強制買入。');}
   else if(c.category==='股東大會'){
-   // Meeting values are not silently reinterpreted as prices. Explicit quotations take precedence.
-   if(c.marketQuotes)items=pricedItems(c,c.marketQuotes,'stocks');
-   else if(/股價|成交價|市場報價/.test(c.effective.effect||''))items=pricedItems(c,fields(c),'stocks');
-   else if(this.state.marketState?.stocks){items=pricedItems(c,this.state.marketState.stocks,'stocks');quoteOrigin='LATEST_STOCK_QUOTES';}
-   else if(this.state.marketPrices?.stocks?.length){items=copy(this.state.marketPrices.stocks).map(i=>({...i,blockedBuy:i.currentMarketPrice===0,blockedSell:false}));quoteOrigin='LATEST_STOCK_QUOTES';}
-   else if(this.state.quotes?.['新聞報導股票行情']){items=pricedItems(c,this.state.quotes['新聞報導股票行情'],'stocks');quoteOrigin='LATEST_STOCK_QUOTES';}
-   if(!items.length)issues.push('尚無明確股票報價；所有玩家仍依序參與，取得報價前不開放成交。');
+   // Distribute only against existing stock holdings; this is never a trading opportunity.
+   items=[];
   }else if(c.category==='詭譎市場'&&!Object.keys(fields(c)).length){
    const m=(c.effective.effect||'').match(/^拿所有資金的一半買進(.+?)(股票|期貨)；翻一張報價；不足([\d萬千百]+)者買進所有資金$/);
    if(m){
@@ -152,12 +152,13 @@
   const market={id:'market-'+this.state.round+'-'+this.state.events.length+'-'+c.cardId,cardId:c.cardId,triggerPlayerId:this.active.id,marketParticipants:participants,participantIndex:0,completedParticipants:[],status:'trading',quoteCardId:quoteOrigin==='LATEST_STOCK_QUOTES'&&items.length?items[0].quoteCardId:quoteCard.cardId,quoteOrigin:items.length?quoteOrigin:'NONE',items,globalMarketEffect:compiled.globalMarketEffect,playerSpecificEffect:compiled.playerSpecificEffect,issues:[...issues,...compiled.issues],effectsApplied:true,effectResults:[],trades:[]};
   market.version=2;market.futuresBought={};market.exempt=exempt;
   const policyKind=c.category==='詭譎市場'?'risk':c.category==='股東大會'?'meeting':items.some(i=>i.asset==='futures')?'futures':items.some(i=>i.asset==='stocks')?'stocks':'bondsFunds';
-  const configured=this.state.marketPolicy?.eligibleTraders?.[policyKind];market.policyKind=policyKind;market.permissionStatus=Array.isArray(configured)?'configured':'unconfigured';
-  market.eligibleTraders=exempt?[]:participants.filter(id=>configured?.includes(id));
+  const configured=c.eligibleTraders??(ordinaryMarketOpportunity(c)?participants:this.state.marketPolicy?.eligibleTraders?.[policyKind]??participants);market.policyKind=policyKind;market.permissionStatus='configured';
+  market.eligibleTraders=exempt||c.category==='股東大會'?[]:participants.filter(id=>configured?.includes(id));
   if(!Array.isArray(configured)&&!exempt)market.issues.push('主動交易權限尚未設定；本次只更新全域行情與既有持倉，不授權任何玩家主動交易。');
   for(const item of items)item.previousMarketPrice=this.state.marketState?.[item.asset]?.[item.name]??this.state.marketPrices?.[item.asset]?.find(i=>i.name===item.name)?.currentMarketPrice??null;
   if(c.category==='股東大會')for(const p of drafts.filter(live)){
    const result=this.shareholderMeeting(p,c);
+   if(result.status==='no-stocks'){market.effectResults.push({type:'SHAREHOLDER_MEETING_SKIPPED',playerId:p.id,amount:0,message:'沒有持有股票，略過股東大會。'});continue;}
    if(result.manualResolution)market.issues.push(p.name+'：'+result.issues.join('；'));
    else{p.cash=finite(result.remainingCash);market.effectResults.push({type:'SHAREHOLDER_MEETING',playerId:p.id,amount:result.amount,message:result.message});}
   }
@@ -206,7 +207,6 @@
   }
   // Mark to this fixed quote without changing historical acquisition cost.
   for(const p of drafts.filter(live)){for(const item of items)for(const {a,units} of positions(p,item,this.byId))if(units!==null){if(item.asset!=='futures')a.value=finite(units*item.currentMarketPrice);else if(validFuture(a))a.value=finite(a.margin+(item.currentMarketPrice-a.entryPrice)*units);}G.play.calculate(p);}
-  if(policyKind==='futures')market.eligibleTraders=market.eligibleTraders.filter(id=>canTradeFutures(drafts.find(p=>p.id===id)));
   if(!market.eligibleTraders.length)market.status='awaiting-ack';
   market.issues=[...new Set(market.issues)];
   const marketState=copy(this.state.marketState||{});for(const item of items){marketState[item.asset]??={};marketState[item.asset][item.name]=item.currentMarketPrice;}
@@ -222,6 +222,7 @@
   return positions(p,item,this.byId).map(x=>({...copy(x.a),quotedUnits:x.units,storageKind:x.kind}));
  };
  P.requireTrader=function(playerId,marketId){
+  if(this.byId.get(this.state.pending?.cardId)?.category==='股東大會')throw Error('股東大會只依既有持股結算，不開放買賣');
   const m=this.marketPhase,p=this.trader;
   if(this.state.phase!=='resolving'||!m||m.status!=='trading'||!p||!live(p))throw Error('目前沒有可操作的市場交易者');
   if(playerId!==p.id||marketId!==m.id)throw Error('不是目前交易玩家，或市場階段已變更');
@@ -255,7 +256,7 @@
   this.checkFreedom(p);return q;
  };
  P.buyMarket=function(name,units,...extra){if(extra.length)throw Error('價格由行情卡固定，不接受人工價格');return this.executeMarket(name,units,'buy');};
- P.sellMarket=function(name,units){return this.executeMarket(name,units,'sell');};
+ P.sellMarket=function(name,units,...extra){if(extra.length)throw Error('價格由行情卡固定，不接受人工價格');return this.executeMarket(name,units,'sell');};
  P.completeMarket=function(playerId=this.trader?.id,marketId=this.marketPhase?.id){
   const p=this.requireTrader(playerId,marketId),m=this.marketPhase;
   m.completedParticipants.push(p.id);m.participantIndex++;
@@ -277,7 +278,32 @@
  P.borrow=function(...args){if(this.isMarketCard())throw Error('市場階段不接受人工借款');return oldBorrow.apply(this,args);};
  P.validate=function(){
   oldValidate.call(this);const m=this.marketPhase;if(!m)return true;
+  const meeting=this.byId.get(m.cardId)?.category==='股東大會';
+  if(meeting){
+   // Disable legacy meeting trades without replaying dividends or undoing past transactions.
+   m.version=2;m.eligibleTraders=[];m.participantIndex=0;m.completedParticipants=[];m.status='awaiting-ack';m.permissionStatus='configured';m.futuresBought??={};m.items=[];m.quoteOrigin='NONE';m.quoteCardId=m.cardId;
+   m.issues=(m.issues||[]).filter(x=>!x.includes('尚無明確股票報價')&&!x.includes('主動交易權限尚未設定')&&!x.includes('舊存檔交易權限已停用'));
+  }
+  // Repair ordinary market access; keep the saved quotes, effects and completed turns.
+  if(ordinaryMarketOpportunity(this.byId.get(m.cardId))&&!m.exempt){
+   const participants=this.state.players.filter(live).map(p=>p.id);
+   const completed=Array.isArray(m.completedParticipants)?m.completedParticipants:[];
+   const eligible=[...completed,...participants.filter(id=>!completed.includes(id))];
+   m.marketParticipants=[...new Set([...(m.marketParticipants||[]),...eligible])];
+   m.eligibleTraders=eligible;m.participantIndex=completed.length;m.completedParticipants=completed;
+   m.version=2;m.futuresBought??={};m.permissionStatus='configured';
+   m.status=eligible.length>completed.length?'trading':'awaiting-ack';
+   m.issues=(m.issues||[]).filter(x=>!x.includes('主動交易權限尚未設定')&&!x.includes('舊存檔交易權限已停用'));
+  }
   if(m.version!==2){m.version=2;m.eligibleTraders=[];m.participantIndex=0;m.completedParticipants=[];m.status='awaiting-ack';m.futuresBought={};m.permissionStatus='unconfigured';m.issues??=[];m.issues.push('舊存檔交易權限已停用，既有結算不重複執行；下次行情使用新版規則。');}
+  // Restore an unconfigured, unopened trading round without repeating market effects.
+  if(!meeting&&m.permissionStatus==='unconfigured'&&m.status==='awaiting-ack'&&!m.exempt&&m.eligibleTraders.length===0){
+   const cardEligible=this.byId.get(m.cardId)?.eligibleTraders;
+   m.eligibleTraders=m.marketParticipants.filter(id=>{const p=this.state.players.find(p=>p.id===id);return p&&live(p)&&(!Array.isArray(cardEligible)||cardEligible.includes(id));});
+   m.participantIndex=0;m.completedParticipants=[];m.permissionStatus='configured';
+   m.status=m.eligibleTraders.length?'trading':'awaiting-ack';
+   m.issues=(m.issues||[]).filter(x=>!x.includes('主動交易權限尚未設定')&&!x.includes('舊存檔交易權限已停用'));
+  }
   const ids=this.state.players.map(p=>p.id);
   if(this.state.phase!=='resolving'||!this.isMarketCard()||m.cardId!==this.state.pending.cardId||m.triggerPlayerId!==this.active.id||!Array.isArray(m.marketParticipants)||!m.marketParticipants.length||new Set(m.marketParticipants).size!==m.marketParticipants.length||m.marketParticipants.some(id=>!ids.includes(id))||!Array.isArray(m.eligibleTraders)||new Set(m.eligibleTraders).size!==m.eligibleTraders.length||m.eligibleTraders.some(id=>!m.marketParticipants.includes(id))||!Number.isInteger(m.participantIndex)||m.participantIndex<0||!['trading','awaiting-ack'].includes(m.status)||m.status==='trading'&&m.participantIndex>=m.eligibleTraders.length||m.status==='awaiting-ack'&&m.eligibleTraders.length!==0||!m.effectsApplied||JSON.stringify(m.completedParticipants)!==JSON.stringify(m.eligibleTraders.slice(0,m.participantIndex))||!m.futuresBought||Object.values(m.futuresBought).some(n=>!Number.isSafeInteger(n)||n<0))throw Error('市場階段存檔結構不一致');
   if(!Array.isArray(m.items)||m.items.some(i=>!this.byId.has(i.quoteCardId)||!Number.isFinite(i.currentMarketPrice)||i.currentMarketPrice<0||!['stocks','futures',...securityKinds].includes(i.asset)))throw Error('市場行情快照不合法');

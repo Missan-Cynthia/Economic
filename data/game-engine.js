@@ -218,6 +218,7 @@
   return {...c,eventType:market?'MARKET_EVENT':'PLAYER_EVENT',eventScopes,effectScope:c.category==='詭譎市場'?'CURRENT_PLAYER':market?'MARKET_ALL_PLAYERS':c.resolver?.allPlayers||/所有玩家|全場玩家/.test(text)?'ALL_PLAYERS':c.effectScope==='QUALIFIED_PLAYERS'?'QUALIFIED_PLAYERS':'CURRENT_PLAYER'};
  }
  function upgradeCardCore(c){
+  if((c.effective?.title||c.title)==='生小孩')return {...c,autoResolvable:true,manualResolution:false,rulesStatus:'ready',resolver:{op:'state-rule',event:'childbirth',field:'children',dice:1,outcomes:[0,0,0,1,1,1]},resolutionReason:'擲一顆骰子，1～3沒有生小孩，4～6增加一名小孩'};
   const p=propertyPurchaseHandler(c);
   if(p)return {...c,autoResolvable:true,manualResolution:false,cardType:'PROPERTY_PURCHASE',rulesStatus:'ready',normalizedValue:normalizeProperty(c),resolver:{op:'PROPERTY_PURCHASE'},resolutionReason:'完整房產數值：共用購買處理器'};
   if(['printed-value-review','incomplete-rules','corrected-rules-review'].includes(c.rulesStatus))return c;
@@ -264,6 +265,7 @@
   const metrics={rent:total(p.assets.properties.map(a=>a.income)),propertyValue:total(p.assets.properties.map(a=>a.value)),propertyCount:p.assets.properties.length,salary:p.salaryIncome,cash:p.cash,children:p.children};
   let amount=r.amount??(r.metric?r.factor*metrics[r.metric]:r.outcomes?r.outcomes[rolls[0]-1]:r.dieFactor*total(rolls));
   amount+=r.childAmount?r.childAmount*p.children:0;if(exempt)amount=0;
+  if(r.event==='childbirth')return {kind:'state-auto',field:'children',amount,die:rolls[0],message:'骰子 '+rolls[0]+' 點：'+(amount?'增加 1 個小孩；小孩總數 '+(p.children+1)+'。':'沒有生小孩，玩家資料不變。')};
   return {kind:'state-auto',field:r.field,amount:num(amount),message:exempt?'不符合持有條件或符合豁免，本卡無影響。':'系統結算：'+r.field+' '+(amount>=0?'+':'')+amount+' 元。'};
  }
  function compileSale(c){
@@ -330,7 +332,7 @@
    this.log('NEW_GAME','四位玩家準備出發');return this.state;
   }
   get active(){return this.state.players[this.state.turn];}
-  log(code,text,cardId=null,playerId=this.active.id){const m=this.state.pending?.market;const e={sequence:this.state.events.length+1,round:this.state.round,playerId,code,text,cardId,...(m?{triggerPlayerId:m.triggerPlayerId,marketEventId:m.id}:{})};this.state.events.push(e);this.logger(e);}
+  log(code,text,cardId=null,playerId=this.active.id){const m=this.state.pending?.market;const e={sequence:this.state.events.length+1,round:this.state.round,playerId,code,text,cardId,...(m?{triggerPlayerId:m.triggerPlayerId,marketEventId:m.id}:this.bankPhase?{triggerPlayerId:this.bankPhase.triggerPlayerId,bankEventId:this.bankPhase.id}:{})};this.state.events.push(e);this.logger(e);}
   checkFreedom(p){calculate(p);if(!p.financialFreedom&&p.passiveIncome>p.totalExpense){p.financialFreedom=true;p.zone='world';p.position=0;this.state.freedomNotice=p.name;this.log('FINANCIAL_FREEDOM',p.name+' 進入財務自由圈！');}}
   clearNotice(){this.state.freedomNotice=null;}
   pay(p){calculate(p);p.cash=num(p.cash+p.monthlyCashflow);this.log('CASHFLOW',p.name+' 領取月現金流 '+p.monthlyCashflow+'元');
@@ -344,6 +346,8 @@
    p.position=route.at(-1);this.state.dice=n;this.log('ROLL',p.name+' 擲出 '+n+' 點');
    const tile=spaces[p.position];this.state.phase='resolving';
    if(tile.effect.kind==='pay-cashflow'){this.pay(p);this.state.pending={kind:'cashflow',tileId:tile.id};}
+   else if(tile.effect.kind==='bank'){this.state.pending={kind:'bank',tileId:tile.id};this.beginBank();}
+   else if(tile.effect.kind==='childbirth'){this.state.pending={kind:'childbirth',tileId:tile.id};this.log('CHILDBIRTH_OPEN',p.name+' 停在生小孩格，必須擲一顆事件骰');}
    else if(tile.cardPool){
     let pool=this.cards.filter(c=>c.gameModule===tile.cardPool.gameModule&&!tile.cardPool.excludeCardTypes.includes(c.cardType));
     if(tile.cardPool.highValue){const high=pool.filter(c=>{const o=offer(c);return !o||o.kind!=='purchase'||o.value>=this.board.settings.worldInvestmentMinimum;});if(high.length)pool=high;}
@@ -356,7 +360,55 @@
    }else this.state.pending={kind:'rest',tileId:tile.id};
    return {dice:n,route,zone:p.zone};
   }
-  requiresEventDie(){const c=this.byId.get(this.state.pending?.cardId);return !!c&&/骰/.test((c.effective.effect||'')+' '+JSON.stringify(c.effective.fields||{}));}
+  get bankPhase(){return this.state?.pending?.bank||null;}
+  get bankApplicant(){const b=this.bankPhase;return b?.status==='choosing'?this.state.players.find(p=>p.id===b.participants[b.participantIndex]):null;}
+  beginBank(){
+   if(this.bankPhase)return this.bankPhase;
+   if(this.state.phase!=='resolving'||this.state.pending?.kind!=='bank')throw Error('目前不是銀行貸款階段');
+   const participants=this.state.players.filter(G.play.market.live).map(p=>p.id);
+   if(!participants.length)throw Error('沒有仍在遊戲中的玩家');
+   this.state.pending.bank={id:'bank-'+this.state.round+'-'+this.state.events.length,triggerPlayerId:this.active.id,participants,participantIndex:0,decisions:[],status:'choosing'};
+   this.log('BANK_OPEN',this.active.name+' 停在銀行，全體 '+participants.length+' 位玩家各有一次申請貸款機會');
+   return this.bankPhase;
+  }
+  requireBankApplicant(playerId,bankId){
+   const p=this.bankApplicant,b=this.bankPhase;
+   if(this.state.phase!=='resolving'||!p||!G.play.market.live(p)||p.id!==playerId||b.id!==bankId)throw Error('不是目前銀行申請玩家，或銀行階段已變更');
+   return p;
+  }
+  bankLoanLimit(playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
+   const p=this.requireBankApplicant(playerId,bankId),debt=total(Object.values(p.liabilities).flat().map(l=>l.principal));
+   return Math.max(0,num(p.maxLoan)-num(debt));
+  }
+  chooseBankLoan(principal,monthlyPayment,playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
+   const p=this.requireBankApplicant(playerId,bankId),limit=this.bankLoanLimit(playerId,bankId);
+   num(principal);num(monthlyPayment);
+   if(principal<=0||principal>limit||monthlyPayment<0)throw Error('請檢查本金、月息及角色剩餘貸款上限');
+   const draft=copy(p);draft.liabilities.loans.push({id:bankId+'-'+p.id,principal,monthlyPayment});draft.cash=num(draft.cash+principal);calculate(draft);Object.assign(p,draft);
+   this.log('BANK_LOAN',p.name+' 申請貸款 '+principal+' 元；每月利息 '+monthlyPayment+' 元',null,p.id);
+   return this.completeBankChoice({playerId:p.id,choice:'apply',principal,monthlyPayment});
+  }
+  declineBankLoan(playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
+   const p=this.requireBankApplicant(playerId,bankId);this.log('BANK_DECLINED',p.name+' 不申請本次銀行貸款',null,p.id);
+   return this.completeBankChoice({playerId:p.id,choice:'decline'});
+  }
+  completeBankChoice(decision){
+   const b=this.bankPhase;b.decisions.push(decision);b.participantIndex++;
+   while(b.participantIndex<b.participants.length&&!G.play.market.live(this.state.players.find(p=>p.id===b.participants[b.participantIndex]))){b.decisions.push({playerId:b.participants[b.participantIndex++],choice:'inactive'});}
+   if(b.participantIndex===b.participants.length){b.status='complete';this.state.lastBank=copy(b);this.log('BANK_CLOSED','全體玩家完成銀行貸款選擇');this.finish();return {complete:true};}
+   return {complete:false,playerId:this.bankApplicant.id};
+  }
+  childbirthCard(){return {cardId:null,category:'棋盤事件',gameModule:'生活事件',autoResolvable:true,effective:{title:'生小孩',effect:'擲1顆骰子；1～3沒有生小孩；4～6增加1個小孩。每人暫定上限3名；已有3名時，改領點數×10000元小孩補助金。',fields:{}},resolver:{op:'state-rule',event:'childbirth',field:'children',dice:1,outcomes:[0,0,0,1,1,1]}};}
+  childLimit(){const limit=this.board.settings.maxChildren??3;return Number.isSafeInteger(limit)&&limit>=0?limit:null;}
+  childbirthPreview(c){
+   const result=stateRulePreview(c,this.active,this.state.pending.eventRolls||[]),limit=this.childLimit();
+   if(result.waitingDice)return {...result,childLimit:limit};
+   if(limit!==null&&this.active.children>=limit)return {...result,field:'cash',amount:result.die*10000,childLimit:limit,subsidy:true,message:'骰子 '+result.die+' 點：已有 '+this.active.children+' 名小孩，領取小孩補助金 '+(result.die*10000)+' 元（'+result.die+' × 10000），小孩數不變。'};
+   if(!result.amount)return {...result,childLimit:limit};
+   if(limit===null)return {...result,waitingChildLimit:true,message:'骰子 '+result.die+' 點：職業的小孩上限尚未設定，請先補齊原始設定。'};
+   return {...result,childLimit:limit};
+  }
+  requiresEventDie(){const c=this.state.pending?.kind==='childbirth'?this.childbirthCard():this.byId.get(this.state.pending?.cardId);return !!c&&(!!c.resolver?.dice||/骰/.test((c.effective.effect||'')+' '+JSON.stringify(c.effective.fields||{})));}
   dividend(){
    const c=this.byId.get(this.state.pending?.cardId);if(c?.category!=='現金股利')return null;
    const title=(c.effective.title||'').match(/^(.+)發送現金股利$/),effect=(c.effective.effect||'').match(/^領取現金(\d+)元\/張。?（此收入為一次性領取）$/);
@@ -405,16 +457,18 @@
   }
 
   rollEventDie(){
-   if(this.state.phase!=='resolving'||this.state.pending?.kind!=='card')throw Error('請在卡牌結算時擲事件骰');
+   if(this.state.phase!=='resolving'||!['card','childbirth'].includes(this.state.pending?.kind))throw Error('請在事件結算時擲事件骰');
+   if(this.investmentFunding()?.canAfford===false)throw Error('資金不足，無法購買或投資，只能放棄');
    if(!this.requiresEventDie())throw Error('此卡不需要事件骰');
-   const rule=this.byId.get(this.state.pending.cardId)?.resolver;
+   const rule=(this.state.pending.kind==='childbirth'?this.childbirthCard():this.byId.get(this.state.pending.cardId))?.resolver;
    if(rule?.dice&&(this.state.pending.eventRolls||[]).length>=rule.dice)throw Error('已完成指定骰數，不可重擲');
    const value=this.random(6)+1;
    (this.state.pending.eventRolls??=[]).push(value);
    this.log('EVENT_DICE',this.active.name+' 事件骰擲出 '+value+' 點（不移動棋子）',this.state.pending.cardId);
    return value;
   }
-  preview(){const meeting=this.shareholderMeeting();if(meeting)return meeting;const dividend=this.dividend();if(dividend?.kind==='dividend')return dividend;const c=this.byId.get(this.state.pending?.cardId);if(!c)return null;
+  preview(){if(this.state.pending?.kind==='childbirth')return this.childbirthPreview(this.childbirthCard());const meeting=this.shareholderMeeting();if(meeting)return meeting;const dividend=this.dividend();if(dividend?.kind==='dividend')return dividend;const c=this.byId.get(this.state.pending?.cardId);if(!c)return null;
+   if(c.resolver?.event==='childbirth')return this.childbirthPreview(c);
    if(c.resolver?.op==='property-sale'){
     const r=c.resolver,options=this.active.assets.properties.filter(a=>r.tokens.every(t=>(a.name||'').replace(/二房|2房/g,'兩房').includes(t))).map(a=>({id:a.id,name:a.name,price:r.price,loan:total(this.active.liabilities.mortgage.filter(l=>l.id===a.id).map(l=>l.principal))}));
     const selected=options.find(a=>a.id===this.state.pending.saleAssetId)||options[0];
@@ -423,18 +477,32 @@
    if(c.manualResolution&&c.gameModule==='事業系統'&&/小生意|小事業|大企業|無事業者/.test(c.effective.effect||'')&&!this.active.assets.businesses.length)return {kind:'state-auto',field:'cash',amount:0,message:'沒有持有事業，本卡無影響。'};
    const stateResult=stateRulePreview(c,this.active,this.state.pending.eventRolls||[]);if(stateResult)return stateResult;
    const o=offer(c);if(o?.kind==='purchase'&&this.active.characterId==='characters-013'&&!this.active.skillUsed&&o.asset==='properties')return {...o,cost:o.downPayment/2+(o.renovationCost||0),explanation:'角色技能：首次房產頭期款半價（整修費不折扣，房貸不變）。'};return o;}
+  investmentFunding(){
+   const c=this.byId.get(this.state.pending?.cardId);if(!c||this.isMarketCard(c))return null;
+   const o=this.preview(),amount=(c.effective?.effect||'').match(/(?:投資成本|投資金額)([\d.,萬千百億]+)元/);
+   const cost=o?.kind==='purchase'?o.cost:amount?moneyValue(amount[1]):null;
+   if(cost===null)return null;
+   return {cost,cash:this.active.cash,shortfall:Math.max(0,cost-this.active.cash),canAfford:this.active.cash>=cost};
+  }
   apply(){
    if(this.state.phase!=='resolving')throw Error('目前沒有待結算事件');
+   if(this.investmentFunding()?.canAfford===false)throw Error('資金不足，無法購買或投資，只能放棄');
    if(this.shareholderMeeting())return this.completeMeeting();
    const dividend=this.dividend();if(dividend?.kind==='dividend'){
     this.active.cash=num(this.active.cash+dividend.amount);
     this.log('CASH_DIVIDEND',this.active.name+' 領取 '+dividend.stock+' 現金股利：'+dividend.perLot+'元 × '+dividend.lots+'張 = '+dividend.amount+'元',this.state.pending.cardId);
     this.finish();return;
    }
-   const c=this.byId.get(this.state.pending?.cardId),o=this.preview(),p=this.active;
+   const c=this.state.pending?.kind==='childbirth'?this.childbirthCard():this.byId.get(this.state.pending?.cardId),o=this.preview(),p=this.active;
    if(!c||!o)throw Error('此牌需人工輸入結算值，或選擇略過');
    if(o.kind==='state-auto'){
     if(o.waitingDice)throw Error('請先完成指定骰數');
+    if(c.resolver.event==='childbirth'){
+     if(o.waitingChildLimit)throw Error('職業小孩上限尚未設定，無法結算');
+     if(o.amount){if(o.subsidy)p.cash=num(p.cash+o.amount);else p.children=num(p.children+1);calculate(p);}
+     this.log(o.subsidy?'CHILD_SUBSIDY':'CHILDBIRTH_RESULT',p.name+' '+o.message+' 小孩月支出 '+p.childExpense+' 元；月現金流 '+p.monthlyCashflow+' 元。',c.cardId);
+     this.state.phase='done';this.state.pending=null;return;
+    }
     const targets=c.resolver?.allPlayers?this.state.players:[p];
     const drafts=targets.map(target=>{const q=target===p?o:stateRulePreview(c,target),draft=copy(target);draft[q.field]=num(draft[q.field]+q.amount);calculate(draft);return draft;});
     targets.forEach((target,i)=>Object.assign(target,drafts[i]));
@@ -469,6 +537,8 @@
    this.log('BUY',p.name+' 購買 '+(c.effective.title||c.cardId)+'，支付 '+o.cost+'元'+(o.loan?'；依牌面房貸 '+o.loan+'元':''),c.cardId);this.finish();
   }
   manual(values){
+   if(this.bankPhase)throw Error('請使用銀行貸款選擇');
+   if(this.investmentFunding()?.canAfford===false)throw Error('資金不足，無法購買或投資，只能放棄');
    if(propertyPurchaseHandler(this.byId.get(this.state.pending?.cardId)))throw Error('房產由系統結算');
    if(this.shareholderMeeting()||this.marketItems().length)throw Error('此事件直接讀取持倉，不接受人工改帳');
    if(this.mandatoryPayment()!==null||this.dividend()?.kind==='dividend')throw Error('此卡請按確定，由系統結算');
@@ -480,6 +550,8 @@
    this.log('MANUAL_APPLY',this.active.name+' 人工結算 '+JSON.stringify(values),this.state.pending?.cardId||null);this.finish();
   }
   borrow(principal,monthlyPayment){
+   if(this.bankPhase)throw Error('請使用銀行貸款選擇');
+   if(this.investmentFunding()?.canAfford===false)throw Error('資金不足，只能放棄，不提供額外融資');
    if(propertyPurchaseHandler(this.byId.get(this.state.pending?.cardId)))throw Error('房貸由牌面計算，不提供額外融資');
    if(this.shareholderMeeting()||this.marketItems().length)throw Error('此事件不提供借款操作');
    num(principal);num(monthlyPayment);const p=this.active;
@@ -488,12 +560,17 @@
    num(p.cash+principal);num(p.totalExpense+monthlyPayment);
    p.liabilities.loans.push({id:'loan-'+this.state.events.length,principal,monthlyPayment});p.cash+=principal;calculate(p);this.log('MANUAL_LOAN',p.name+' 人工借款 '+principal+'元；每月利息 '+monthlyPayment+'元');
   }
-  skip(){if(this.state.phase!=='resolving')throw Error('沒有待處理回合');if(this.preview()?.kind==='state-auto'||this.mandatoryPayment()!==null||this.dividend()?.kind==='dividend')throw Error('此卡不能略過，請按確定');const c=this.byId.get(this.state.pending?.cardId);this.log(c?.manualResolution?'MANUAL_RULE_SKIPPED':'SKIP',this.active.name+' 略過'+(c?' '+(c.effective.title||c.cardId):''),c?.cardId||null);this.finish();}
-  finish(){this.checkFreedom(this.active);this.state.phase='done';this.state.pending=null;}
+  skip(){if(this.bankPhase)throw Error('請逐位選擇申請或不申請貸款');if(this.state.phase!=='resolving')throw Error('沒有待處理回合');if(this.preview()?.kind==='state-auto'||this.mandatoryPayment()!==null||this.dividend()?.kind==='dividend')throw Error('此卡不能略過，請按確定');const c=this.byId.get(this.state.pending?.cardId);this.log(c?.manualResolution?'MANUAL_RULE_SKIPPED':'SKIP',this.active.name+' 略過'+(c?' '+(c.effective.title||c.cardId):''),c?.cardId||null);this.finish();}
+  finish(){if(this.bankPhase?.status==='choosing')throw Error('全體玩家完成銀行選擇後才能繼續');this.checkFreedom(this.active);this.state.phase='done';this.state.pending=null;}
   end(){if(this.state.phase!=='done')throw Error('回合尚未完成');this.state.turn=(this.state.turn+1)%4;if(!this.state.turn)this.state.round++;this.state.phase='ready';}
   validate(){
    const s=this.state;if(!s||s.version!==1||s.players?.length!==4||!Number.isInteger(s.turn)||s.turn<0||s.turn>3||!Number.isInteger(s.round)||s.round<1||!['ready','resolving','done'].includes(s.phase))throw Error('存檔結構不相容');
    if(s.pending?.cardId&&!this.byId.has(s.pending.cardId))throw Error('不存在的 cardId');
+   if(s.pending?.kind==='bank'){
+    if(!s.pending.bank)this.beginBank();
+    const b=this.bankPhase,ids=s.players.map(p=>p.id);
+    if(s.phase!=='resolving'||b.status!=='choosing'||b.triggerPlayerId!==this.active.id||!Array.isArray(b.participants)||!b.participants.length||new Set(b.participants).size!==b.participants.length||b.participants.some(id=>!ids.includes(id))||!Number.isInteger(b.participantIndex)||b.participantIndex<0||b.participantIndex>=b.participants.length||!Array.isArray(b.decisions)||b.decisions.length!==b.participantIndex||b.decisions.some((d,i)=>d.playerId!==b.participants[i]||!['apply','decline','inactive'].includes(d.choice)))throw Error('銀行貸款階段存檔不一致');
+   }
    for(const p of s.players){if(!this.byId.has(p.characterId)||!['taiwan','world'].includes(p.zone)||!Number.isInteger(p.position)||p.position<0||p.position>=this.board.zone(p.zone).length)throw Error('存檔玩家位置錯誤');calculate(p);for(const a of Object.values(p.assets).flat())if(!this.byId.has(a.cardId))throw Error('資產 cardId 不存在');}
    for(const e of s.events)if(e.cardId&&!this.byId.has(e.cardId))throw Error('紀錄 cardId 不存在');
    const walk=v=>{if(typeof v==='number')num(v);else if(v&&typeof v==='object')Object.values(v).forEach(walk);};walk(s);return true;

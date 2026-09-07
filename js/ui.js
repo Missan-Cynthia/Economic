@@ -4,15 +4,15 @@
  let viewed=0;
  function screen(id){for(const s of ['welcome','setup','game'])$(s).hidden=s!==id;}
  function board(){
-  const palette={start:'#6b9e73',cashflow:'#6b9e73',stock:'#398dc9',property:'#249f78',business:'#da6560',life:'#c99226',investment:'#a68bc2',futures:'#9b79ae',bonds:'#698cac'};
-  $('tiles').replaceChildren();for(const s of BoardData.spaces){const t=el('div','',`tile ${s.zone}`);t.id=s.id;t.style.left=s.position.x+'%';t.style.top=s.position.y+'%';t.style.setProperty('--tile',palette[s.type]);t.append(el('b',s.icon),el('span',s.label));$('tiles').append(t);}
+  const palette={childbirth:'#d58f9c',bank:'#507c91',start:'#6b9e73',cashflow:'#6b9e73',stock:'#398dc9',property:'#249f78',business:'#da6560',life:'#c99226',investment:'#a68bc2',futures:'#9b79ae',bonds:'#698cac'};
+  $('tiles').replaceChildren();for(const s of BoardData.spaces){const t=el('div','',`tile ${s.zone}`);t.id=s.id;t.style.left=s.position.x+'%';t.style.top=s.position.y+'%';t.style.width=s.size.width+'%';t.style.height=s.size.height+'%';t.style.setProperty('--tile',palette[s.type]);t.append(el('b',s.icon),el('span',s.label));$('tiles').append(t);}
   $('pawns').replaceChildren();for(let i=0;i<4;i++){const p=el('div',String(i+1),'pawn'+(i===0?' human':''));p.id='pawn-'+i;p.style.setProperty('--pawn',colors[i]);$('pawns').append(p);}
  }
- function position(p,index=p.position,zone=p.zone){const t=BoardData.zone(zone)[index],e=$('pawn-'+p.id);e.style.left=(t.position.x+(p.id%2?1.3:-1.3))+'%';e.style.top=(t.position.y+(p.id>1?1.2:-1.2))+'%';}
+ function position(p,index=p.position,zone=p.zone){const t=BoardData.zone(zone)[index],e=$('pawn-'+p.id);e.style.left=(t.position.x+(p.id%2?1:-1)*t.size.width*0.23)+'%';e.style.top=(t.position.y+(p.id>1?1:-1)*t.size.height*0.23)+'%';}
  function render(s,busy=false,positions=true){
   $('round').textContent='第 '+s.round+' 輪';$('turnName').textContent='目前回合：'+s.players[s.turn].name;
   const market=s.pending?.market,trader=market?s.players.find(p=>p.id===market.eligibleTraders?.[market.participantIndex]):null;
-  $('phaseLabel').textContent=trader?'市場交易階段 · '+trader.name:s.players[s.turn].personality==='human'?'輪到你了':'電腦玩家思考中…';
+  $('phaseLabel').textContent=s.pending?.bank?'銀行貸款階段':trader?'市場交易階段 · '+trader.name:s.players[s.turn].personality==='human'?'輪到你了':'電腦玩家思考中…';
   $('playerTabs').replaceChildren();for(const p of s.players){const b=el('button','','player-tab'+(p.id===viewed?' selected':'')+(p.id===s.turn?' current':''));b.style.setProperty('--pawn',colors[p.id]);b.append(el('span',p.id===0?'◉':'●'),el('strong',p.id===0?'你':p.name.replace('AI・','')));b.title=p.name+' · '+p.occupation;b.onclick=()=>{viewed=p.id;render(s,busy);};$('playerTabs').append(b);if(positions)position(p);}
   for(const t of document.querySelectorAll('.tile.active'))t.classList.remove('active');$(s.players[s.turn].zone+'-'+s.players[s.turn].position).classList.add('active');
   const p=s.players[viewed];$('personName').textContent=p.name;$('occupation').textContent=p.occupation+' · '+'★'.repeat(p.stars);$('personType').textContent=viewed===0?'你的財務帳本':ComputerPlayers.profiles[p.personality].label+' · 財務帳本';$('personAvatar').style.setProperty('--pawn',colors[viewed]);

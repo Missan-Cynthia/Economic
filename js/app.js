@@ -4,7 +4,25 @@
  function persist(){GameSave.write(session.state);$('saveStatus').textContent=GameSave.error||'已自動儲存 · 本機瀏覽器';}
  function render(positions=true){U.render(session.state,busy,positions);$('home').disabled=busy;if($('cardDialog').open){U.account(session.state);if(!$('tradeForm').hidden)quoteTrade();}}
  function fail(e){console.error(e);$('cardError').textContent=e.message;$('loadStatus').textContent=e.message;}
- function showPending(){const c=session.byId.get(session.state.pending?.cardId);if(c){
+ function showBank(){
+  let dialog=$('bankDialog');
+  if(!dialog){
+   dialog=document.createElement('dialog');dialog.id='bankDialog';dialog.style.cssText='width:min(520px,90vw);padding:28px;border:0;border-radius:20px';
+   dialog.innerHTML='<h2>銀行貸款機會</h2><p id="bankTrigger"></p><h3 id="bankApplicant"></h3><p id="bankProgress"></p><p id="bankLimit"></p><form id="bankForm"><label>申請本金（元）<input id="bankPrincipal" type="number" min="1" step="any" required></label><label>每月利息（元）<input id="bankInterest" type="number" min="0" step="any" required></label><p id="bankError" role="alert"></p><button id="bankApply" type="submit" class="primary">申請貸款</button></form><button id="bankDecline" type="button">不申請</button>';
+   dialog.addEventListener('cancel',e=>e.preventDefault());document.body.append(dialog);
+  }
+  const b=session.bankPhase,p=session.bankApplicant,limit=session.bankLoanLimit();busy=false;
+  U.setViewed(p.id);render();$('bankTrigger').textContent='停在銀行：'+session.active.name+'；全體仍在遊戲中的玩家各有一次機會。';
+  $('bankApplicant').textContent='目前選擇：'+p.name;$('bankProgress').textContent='已完成 '+b.decisions.length+' / '+b.participants.length+' 位';
+  $('bankLimit').textContent='目前現金：'+U.money(p.cash)+' 元；剩餘可借：'+U.money(limit)+' 元';
+  $('bankPrincipal').value='';$('bankPrincipal').max=limit;$('bankInterest').value='';$('bankError').textContent='';$('bankApply').disabled=limit<=0;
+  const bankId=b.id,playerId=p.id;
+  const decide=async action=>{if(busy)return;busy=true;try{const result=action();persist();if(result.complete){dialog.close();await afterResolution();}else showBank();}catch(e){$('bankError').textContent=e.message;busy=false;}};
+  $('bankForm').onsubmit=e=>{e.preventDefault();decide(()=>session.chooseBankLoan(Number($('bankPrincipal').value),Number($('bankInterest').value),playerId,bankId));};
+  $('bankDecline').onclick=()=>decide(()=>session.declineBankLoan(playerId,bankId));
+  if(!dialog.open)dialog.showModal();
+ }
+ function showPending(){if(session.bankPhase){showBank();return {kind:'bank'};}const c=session.state.pending?.kind==='childbirth'?session.childbirthCard():session.byId.get(session.state.pending?.cardId);if(c){
   $('marketProgress')?.remove();$('marketQuoteTable')?.remove();$('futuresLotLabel')?.remove();
   if(session.isMarketCard(c)){session.beginMarket();showMarket(c);return c;}
   for(const child of $('humanActions').children)child.hidden=false;
@@ -42,11 +60,24 @@
    $('suggestion').textContent=preview.selected?'售價：'+U.money(preview.selected.price)+'\n清償房貸：'+U.money(preview.selected.loan)+'\n成交後現金：'+U.money(preview.remainingCash):'沒有符合本次收購條件的房產，本卡無影響。';
    if(preview.selected){const select=document.createElement('select');select.id='saleChoice';for(const a of preview.options)select.append(new Option(a.name,a.id));select.value=preview.selected.id;select.onchange=()=>{session.state.pending.saleAssetId=select.value;showPending();};$('humanActions').prepend(select);}
   }else if(preview?.kind==='state-auto'){
-   $('suggestion').textContent=preview.message;$('apply').textContent='確認結算';$('apply').disabled=!!preview.waitingDice;
+   $('suggestion').textContent=preview.message;$('apply').textContent='確認結算';$('apply').disabled=!!preview.waitingDice||!!preview.waitingChildLimit;
    $('skip').hidden=true;$('eventRoll').disabled=!preview.waitingDice;
   }else if(!preview){
    $('apply').hidden=!dev;$('skip').textContent='繼續';
    $('suggestion').textContent=dev?'此卡尚未建立自動規則\ncardId: '+c.cardId:'此事件暫不可結算，本次不變更你的財務。';
+  }
+  const funding=session.investmentFunding();
+  if(funding){
+   if(preview?.kind==='purchase'&&!property){
+    $('apply').textContent='確認購買';$('decisionTitle').textContent='投資資產';
+    $('suggestion').textContent='投資成本：'+U.money(funding.cost)+' 元\n可用現金：'+U.money(funding.cash)+' 元';
+   }
+   if(!funding.canAfford){
+    for(const child of $('humanActions').children)child.hidden=child.id!=='skip';
+    $('apply').disabled=true;$('skip').textContent='放棄';
+    $('decisionTitle').textContent='資金不足，只能放棄';
+    $('suggestion').textContent='投資成本／本次需支付：'+U.money(funding.cost)+' 元\n可用現金：'+U.money(funding.cash)+' 元\n尚缺：'+U.money(funding.shortfall)+' 元';
+   }
   }
  }return c;}
  function showMarket(c){
@@ -65,11 +96,16 @@
    const who=session.state.players.find(p=>p.id===r.playerId)?.name;
    return who+'：'+(r.type==='FUTURES_LIQUIDATION'?'強制平倉 '+r.name+' × '+r.quantity+'，返還保證金 '+U.money(r.margin)+'，價差損益 '+U.money(r.pnl)+'，手續費 '+U.money(r.fee)+'，現金變動 '+U.money(r.amount):r.type==='FORCED_SALE'?'強制賣出 '+r.name+' × '+r.quantity+'，入帳 '+U.money(r.amount):r.type==='UNEMPLOYMENT'?'符合 '+r.industry+' 員工失業條件，工作收入停止':r.type==='FORCED_PURCHASE'?'依觸發事件買進 '+r.name+' × '+r.quantity:r.message);
   });
-  $('suggestion').textContent='行情對全體既有持倉生效；主動交易依 eligibleTraders 設定，不由抽牌者身分決定。'+(m.quoteCardId!==c.cardId?'\n本次報價來源：'+(source?.effective.title||m.quoteCardId):'')+(m.items.some(i=>i.asset==='futures')?'\n期貨只能做多；每口保證金 3,000，平倉每口手續費 3,000。':'')+(effectLines.length?'\n'+effectLines.join('\n'):'')+(m.issues.length?'\n待確認：'+m.issues.join('\n'):'');
+  $('suggestion').textContent='行情對全體既有持倉生效；一般市場交易開放所有仍在遊戲中的玩家，特殊卡牌限制依牌面處理。'+(m.quoteCardId!==c.cardId?'\n本次報價來源：'+(source?.effective.title||m.quoteCardId):'')+(m.items.some(i=>i.asset==='futures')?'\n期貨只能做多；每口保證金 3,000，平倉每口手續費 3,000。':'')+(effectLines.length?'\n'+effectLines.join('\n'):'')+(m.issues.length?'\n待確認：'+m.issues.join('\n'):'');
   if(m.quoteCardId!==c.cardId){$('cardValues').replaceChildren();for(const i of m.items)$('cardValues').append(U.el('dt',i.name),U.el('dd',U.money(i.currentMarketPrice)));}
   $('marketQuoteTable')?.remove();
   if(m.items.some(i=>i.asset==='futures')){const table=U.el('table','');table.id='marketQuoteTable';const head=U.el('tr','');for(const label of ['商品','上期','本期'])head.append(U.el('th',label));table.append(head);for(const i of m.items){const row=U.el('tr','');for(const value of [i.name,i.previousMarketPrice===null?'—':U.money(i.previousMarketPrice),U.money(i.currentMarketPrice)])row.append(U.el('td',value));table.append(row);}$('suggestion').after(table);}
   $('tradeSide').value='buy';if(human&&p)populateTrade();
+  if(c.category==='股東大會'){
+   $('decisionTitle').textContent='股東大會持股結算';$('cardPlayer').textContent='觸發玩家：'+session.triggerPlayer.name;
+   $('marketProgress')?.remove();$('tradeForm').hidden=true;$('tradeDone').textContent='確認結果並繼續';
+   $('suggestion').textContent='只依本次既有股票持倉結算；沒有持有股票的玩家略過。'+(effectLines.length?'\n'+effectLines.join('\n'):'')+(m.issues.length?'\n待確認：'+m.issues.join('\n'):'');
+  }
   U.account(session.state);persist();
  }
  async function driveMarket(){
@@ -90,6 +126,7 @@
  function quoteTrade(){
   const name=$('tradeItem').value,side=$('tradeSide').value,item=session.marketItems().find(x=>x.name===name);
   if(!item){$('tradeEstimate').textContent=side==='sell'?'你沒有本張行情表可賣出的資產。':'沒有可交易商品。';$('tradeBuy').disabled=true;$('tradeMinus').disabled=true;$('tradePlus').disabled=true;return;}
+  document.querySelector('label[for="tradeUnits"]').textContent=item.asset==='stocks'?(side==='buy'?'買幾張':'賣幾張'):item.asset==='futures'?'數量（口）':'數量（單位）';
   try{
    const holdingId=$('futuresLot')?.value||null,limits=session.tradeQuote(name,1,side,session.trader.id,session.marketPhase.id,holdingId),unit=item.asset==='futures'?'口':item.asset==='stocks'?'張':'單位';$('tradeUnits').max=limits.maxQuantity;$('tradeLimit').textContent=side==='buy'?'最多可買 '+limits.maxQuantity+' '+unit:'目前持有 '+limits.held+' '+unit+'，最多可賣 '+limits.maxQuantity+' '+unit;
    const quantity=Number($('tradeUnits').value),q=session.tradeQuote(name,quantity,side,session.trader.id,session.marketPhase.id,holdingId);
@@ -126,7 +163,8 @@
     busy=true;U.setViewed(session.state.turn);render();
     if(session.state.phase==='ready'){await wait(650);if(paused)break;await animateRoll();}
     if(session.state.phase==='resolving'){
-     if(session.marketPhase){if(!await driveMarket())break;}
+     if(session.bankPhase){showBank();break;}
+     else if(session.marketPhase){if(!await driveMarket())break;}
      else{
      const c=showPending();await wait(800);if(paused)break;
      while(session.preview()?.waitingDice)session.rollEventDie();
@@ -137,12 +175,12 @@
     }
     if(session.state.phase==='done'){if($('cardDialog').open)$('cardDialog').close();await announce();session.end();persist();}render();
    }
-  }catch(e){fail(e);}finally{loopRunning=false;busy=false;U.setViewed(session.state.turn);render();}
+  }catch(e){fail(e);}finally{loopRunning=false;busy=false;U.setViewed(session.bankApplicant?.id??session.state.turn);render();}
  }
- async function humanRoll(){if(busy||paused||session.state.turn!==0)return;try{const c=await animateRoll();if(session.marketPhase){if(await driveMarket())await afterResolution();}else if(!c){session.finish();await afterResolution();}else{busy=false;render();}}catch(e){busy=false;fail(e);render();}}
+ async function humanRoll(){if(busy||paused||session.state.turn!==0)return;try{const c=await animateRoll();if(session.bankPhase){showBank();return;}if(session.marketPhase){if(await driveMarket())await afterResolution();}else if(!c){session.finish();await afterResolution();}else{busy=false;render();}}catch(e){busy=false;fail(e);render();}}
  function act(fn){return async e=>{e?.preventDefault();if(busy||session.state.turn!==0)return;try{fn();busy=true;await afterResolution();}catch(err){busy=false;fail(err);render();}};}
  function openGame(saved){session=new GameData.play.Session(cards,BoardData,Math.random,saved,logger);paused=false;U.screen('game');U.board();render();if(session.state.phase==='resolving'){
-  const c=showPending();if(session.marketPhase){driveMarket().then(done=>{if(done)return afterResolution();}).catch(fail);}else if(session.state.turn!==0)runAI();else if(!c){session.finish();afterResolution();}
+  const c=showPending();if(session.bankPhase)return;if(session.marketPhase){driveMarket().then(done=>{if(done)return afterResolution();}).catch(fail);}else if(session.state.turn!==0)runAI();else if(!c){session.finish();afterResolution();}
  }else if(session.state.phase==='done'){afterResolution();}else if(session.state.turn!==0)runAI();}
  function setup(){drawn=false;U.screen('setup');$('playerName').disabled=false;$('begin').textContent='抽取職業卡 ✦';$('roles').replaceChildren(U.el('p','每位玩家各自從 14 種職業隨機抽取，可以抽到相同職業。'));
  }
