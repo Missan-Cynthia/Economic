@@ -206,7 +206,17 @@
   const v=normalizeProperty(c);if(!v)return null;
   return {kind:'purchase',type:'PROPERTY_PURCHASE',asset:'properties',cost:v.downPayment+v.renovationCost,value:v.propertyPrice,loan:v.loanPrincipal,expense:v.monthlyDebtPayment,income:v.monthlyRent,units:1,...v};
  }
- function upgradeCard(c){return classifyCard(upgradeCardCore(c));}
+ const roleIndustries={
+  'characters-003':'無產業','characters-009':'無產業','characters-010':'無產業','characters-011':'無產業',
+  'characters-001':'保全服務業','characters-002':'教育業',
+  'characters-004':'金融業','characters-005':'金融業','characters-006':'餐飲業',
+  'characters-007':'醫療業','characters-008':'醫療業',
+  'characters-012':'公務行政業','characters-013':'房地產業','characters-014':'水電工程業'
+ };
+ function upgradeCard(c){
+  if(c.category==='角色'&&roleIndustries[c.cardId]&&(!c.effective?.fields?.industry||roleIndustries[c.cardId]==='無產業'))c={...c,effective:{...c.effective,fields:{...c.effective.fields,industry:roleIndustries[c.cardId]}}};
+  return classifyCard(upgradeCardCore(c));
+ }
  function classifyCard(c){
   const text=(c.effective?.title||c.title||'')+' '+(c.effective?.effect||c.effect||'');
   const categories=['股市行情','股票行情','股東大會','新聞報導股票行情','期貨行情','詭譎市場','債券＆基金行情','投資行情','市場報價'];
@@ -218,6 +228,7 @@
   return {...c,eventType:market?'MARKET_EVENT':'PLAYER_EVENT',eventScopes,effectScope:c.category==='詭譎市場'?'CURRENT_PLAYER':market?'MARKET_ALL_PLAYERS':c.resolver?.allPlayers||/所有玩家|全場玩家/.test(text)?'ALL_PLAYERS':c.effectScope==='QUALIFIED_PLAYERS'?'QUALIFIED_PLAYERS':'CURRENT_PLAYER'};
  }
  function upgradeCardCore(c){
+  const diceRule=G.play?.dice?.compile(c);if(diceRule)return {...c,autoResolvable:true,manualResolution:false,resolver:{op:'dice-event',...diceRule},rulesStatus:'ready'};
   if((c.effective?.title||c.title)==='生小孩')return {...c,autoResolvable:true,manualResolution:false,rulesStatus:'ready',resolver:{op:'state-rule',event:'childbirth',field:'children',dice:1,outcomes:[0,0,0,1,1,1]},resolutionReason:'擲一顆骰子，1～3沒有生小孩，4～6增加一名小孩'};
   const p=propertyPurchaseHandler(c);
   if(p)return {...c,autoResolvable:true,manualResolution:false,cardType:'PROPERTY_PURCHASE',rulesStatus:'ready',normalizedValue:normalizeProperty(c),resolver:{op:'PROPERTY_PURCHASE'},resolutionReason:'完整房產數值：共用購買處理器'};
@@ -309,7 +320,7 @@
   for(const key of ['workIncome','passiveIncome','totalExpenses','startingSavings','monthlyCashflow','stars','maxLoan'])num(f[key]);
   if(f.totalIncome-f.totalExpenses!==f.monthlyCashflow)throw Error('角色卡收支不一致，請先驗收：'+c.cardId);
   const child=f.childText.match(/^每生一個小孩支出\+(\d+)元$/);
-  return calculate({id,name,personality,characterId:c.cardId,occupation:c.effective.title,stars:f.stars,skill:f.skill,skillUsed:false,
+  return calculate({id,name,personality,characterId:c.cardId,occupation:c.effective.title,employment:{industry:f.industry||null},stars:f.stars,skill:f.skill,skillUsed:false,
    cash:f.startingSavings,salaryIncome:f.workIncome,isStudent:false,isEmployed:f.workIncome>0,basePassiveIncome:f.passiveIncome,manualPassiveIncome:0,livingExpense:f.totalExpenses,
    children:0,childUnitExpense:child?+child[1]:null,manualChildExpense:0,manualPropertyExpense:0,manualBusinessExpense:0,maxLoan:f.maxLoan,
    assets:{stocks:[],properties:[],businesses:[],futures:[],bonds:[],funds:[]},liabilities:{loans:[],carLoan:[],mortgage:[],businessLoan:[]},
@@ -319,7 +330,10 @@
   constructor(cards,board,rng=Math.random,saved=null,logger=()=>{}){
    cards=cards.map(upgradeCard);this.cards=cards;this.byId=new Map(cards.map(c=>[c.cardId,c]));this.board=board;this.rng=rng;this.logger=logger;
    this.state=saved?copy(saved):null;
-   if(saved){this.validate();this.state.players.forEach(calculate);}
+   if(saved){
+    for(const p of this.state.players||[]){const industry=roleIndustries[p.characterId]==='無產業'?'無產業':p.employment?.industry||p.employmentIndustry||p.industry||this.byId.get(p.characterId)?.effective?.fields?.industry||null;p.employment={...p.employment,industry};}
+    this.validate();this.state.players.forEach(calculate);
+   }
   }
   random(n){const r=this.rng();if(!Number.isFinite(r)||r<0||r>=1)throw Error('亂數範圍錯誤');return Math.floor(r*n);}
   start(name,id){
@@ -369,7 +383,20 @@
    if(!participants.length)throw Error('沒有仍在遊戲中的玩家');
    this.state.pending.bank={id:'bank-'+this.state.round+'-'+this.state.events.length,triggerPlayerId:this.active.id,participants,participantIndex:0,decisions:[],status:'choosing'};
    this.log('BANK_OPEN',this.active.name+' 停在銀行，全體 '+participants.length+' 位玩家各有一次申請貸款機會');
+   this.drawBankRate();
    return this.bankPhase;
+  }
+  drawBankRate(){
+   const b=this.bankPhase;if(!b)throw Error('目前不是銀行階段');
+   if(b.annualRate===undefined){b.annualRate=2+this.random(4);this.log('BANK_RATE','本次銀行信用貸款抽出年利率 '+b.annualRate+'%；全體玩家適用，先看利率再決定本金');}
+   return b.annualRate;
+  }
+  bankLoanQuote(principal,playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
+   const limit=this.bankLoanLimit(playerId,bankId);num(principal);
+   if(principal<=0||principal>limit)throw Error('請檢查本金及角色剩餘貸款上限');
+   const annualRate=this.bankPhase.annualRate;
+   if(![2,3,4,5].includes(annualRate))throw Error('銀行利率設定錯誤');
+   return {principal,annualRate,monthlyPayment:Math.round(principal*annualRate/12)/100};
   }
   requireBankApplicant(playerId,bankId){
    const p=this.bankApplicant,b=this.bankPhase;
@@ -380,13 +407,11 @@
    const p=this.requireBankApplicant(playerId,bankId),debt=total(Object.values(p.liabilities).flat().map(l=>l.principal));
    return Math.max(0,num(p.maxLoan)-num(debt));
   }
-  chooseBankLoan(principal,monthlyPayment,playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
-   const p=this.requireBankApplicant(playerId,bankId),limit=this.bankLoanLimit(playerId,bankId);
-   num(principal);num(monthlyPayment);
-   if(principal<=0||principal>limit||monthlyPayment<0)throw Error('請檢查本金、月息及角色剩餘貸款上限');
-   const draft=copy(p);draft.liabilities.loans.push({id:bankId+'-'+p.id,principal,monthlyPayment});draft.cash=num(draft.cash+principal);calculate(draft);Object.assign(p,draft);
-   this.log('BANK_LOAN',p.name+' 申請貸款 '+principal+' 元；每月利息 '+monthlyPayment+' 元',null,p.id);
-   return this.completeBankChoice({playerId:p.id,choice:'apply',principal,monthlyPayment});
+  chooseBankLoan(principal,playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
+   const p=this.requireBankApplicant(playerId,bankId),quote=this.bankLoanQuote(principal,playerId,bankId),{annualRate,monthlyPayment}=quote;
+   const draft=copy(p);draft.liabilities.loans.push({id:bankId+'-'+p.id,...quote});draft.cash=num(draft.cash+principal);calculate(draft);Object.assign(p,draft);
+   this.log('BANK_LOAN',p.name+' 申請貸款 '+principal+' 元；年利率 '+annualRate+'%；每月利息 '+monthlyPayment+' 元',null,p.id);
+   return this.completeBankChoice({playerId:p.id,choice:'apply',...quote});
   }
   declineBankLoan(playerId=this.bankApplicant?.id,bankId=this.bankPhase?.id){
    const p=this.requireBankApplicant(playerId,bankId);this.log('BANK_DECLINED',p.name+' 不申請本次銀行貸款',null,p.id);
@@ -497,7 +522,7 @@
    if(!c||!o)throw Error('此牌需人工輸入結算值，或選擇略過');
    if(o.kind==='state-auto'){
     if(o.waitingDice)throw Error('請先完成指定骰數');
-    if(c.resolver.event==='childbirth'){
+    if(c.resolver?.event==='childbirth'){
      if(o.waitingChildLimit)throw Error('職業小孩上限尚未設定，無法結算');
      if(o.amount){if(o.subsidy)p.cash=num(p.cash+o.amount);else p.children=num(p.children+1);calculate(p);}
      this.log(o.subsidy?'CHILD_SUBSIDY':'CHILDBIRTH_RESULT',p.name+' '+o.message+' 小孩月支出 '+p.childExpense+' 元；月現金流 '+p.monthlyCashflow+' 元。',c.cardId);
@@ -568,6 +593,8 @@
    if(s.pending?.cardId&&!this.byId.has(s.pending.cardId))throw Error('不存在的 cardId');
    if(s.pending?.kind==='bank'){
     if(!s.pending.bank)this.beginBank();
+    this.drawBankRate();
+    if(![2,3,4,5].includes(this.bankPhase.annualRate))throw Error('銀行利率存檔錯誤');
     const b=this.bankPhase,ids=s.players.map(p=>p.id);
     if(s.phase!=='resolving'||b.status!=='choosing'||b.triggerPlayerId!==this.active.id||!Array.isArray(b.participants)||!b.participants.length||new Set(b.participants).size!==b.participants.length||b.participants.some(id=>!ids.includes(id))||!Number.isInteger(b.participantIndex)||b.participantIndex<0||b.participantIndex>=b.participants.length||!Array.isArray(b.decisions)||b.decisions.length!==b.participantIndex||b.decisions.some((d,i)=>d.playerId!==b.participants[i]||!['apply','decline','inactive'].includes(d.choice)))throw Error('銀行貸款階段存檔不一致');
    }
@@ -577,5 +604,5 @@
   }
  }
  G.play={Session,offer,calculate,normalizeProperty,propertyPurchaseHandler,upgradeCard,moneyValue,classifyCard};
- if(typeof module==='object'&&module.exports)require('./market-engine.js')(G);
+ if(typeof module==='object'&&module.exports){require('./market-engine.js')(G);require('./dice-engine.js')(G);}
 })(globalThis);

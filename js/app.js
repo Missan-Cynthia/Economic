@@ -8,17 +8,19 @@
   let dialog=$('bankDialog');
   if(!dialog){
    dialog=document.createElement('dialog');dialog.id='bankDialog';dialog.style.cssText='width:min(520px,90vw);padding:28px;border:0;border-radius:20px';
-   dialog.innerHTML='<h2>銀行貸款機會</h2><p id="bankTrigger"></p><h3 id="bankApplicant"></h3><p id="bankProgress"></p><p id="bankLimit"></p><form id="bankForm"><label>申請本金（元）<input id="bankPrincipal" type="number" min="1" step="any" required></label><label>每月利息（元）<input id="bankInterest" type="number" min="0" step="any" required></label><p id="bankError" role="alert"></p><button id="bankApply" type="submit" class="primary">申請貸款</button></form><button id="bankDecline" type="button">不申請</button>';
+   dialog.innerHTML='<h2>銀行貸款機會</h2><p id="bankTrigger"></p><h3 id="bankApplicant"></h3><p id="bankProgress"></p><p id="bankLimit"></p><p id="bankRate"></p><form id="bankForm"><label>申請本金（元）<input id="bankPrincipal" type="number" min="1" step="any" required></label><p>每月利息（自動計算）：<output id="bankInterest">—</output> 元</p><p id="bankError" role="alert"></p><button id="bankApply" type="submit" class="primary">申請貸款</button></form><button id="bankDecline" type="button">不申請</button>';
    dialog.addEventListener('cancel',e=>e.preventDefault());document.body.append(dialog);
   }
   const b=session.bankPhase,p=session.bankApplicant,limit=session.bankLoanLimit();busy=false;
   U.setViewed(p.id);render();$('bankTrigger').textContent='停在銀行：'+session.active.name+'；全體仍在遊戲中的玩家各有一次機會。';
   $('bankApplicant').textContent='目前選擇：'+p.name;$('bankProgress').textContent='已完成 '+b.decisions.length+' / '+b.participants.length+' 位';
   $('bankLimit').textContent='目前現金：'+U.money(p.cash)+' 元；剩餘可借：'+U.money(limit)+' 元';
-  $('bankPrincipal').value='';$('bankPrincipal').max=limit;$('bankInterest').value='';$('bankError').textContent='';$('bankApply').disabled=limit<=0;
+  $('bankPrincipal').value='';$('bankPrincipal').max=limit;$('bankInterest').textContent='—';$('bankError').textContent='';$('bankApply').disabled=true;
+  $('bankRate').textContent='本次抽出年利率：'+b.annualRate+'%（全體玩家適用）；每月利息＝本金 × 年利率 ÷ 12，四捨五入至小數第 2 位。';persist();
+  $('bankPrincipal').oninput=()=>{try{const quote=session.bankLoanQuote(Number($('bankPrincipal').value));$('bankInterest').textContent=quote.monthlyPayment.toLocaleString('zh-TW',{minimumFractionDigits:2,maximumFractionDigits:2});$('bankApply').disabled=false;$('bankError').textContent='';}catch(e){$('bankInterest').textContent='—';$('bankApply').disabled=true;$('bankError').textContent=$('bankPrincipal').value?e.message:'';}};
   const bankId=b.id,playerId=p.id;
   const decide=async action=>{if(busy)return;busy=true;try{const result=action();persist();if(result.complete){dialog.close();await afterResolution();}else showBank();}catch(e){$('bankError').textContent=e.message;busy=false;}};
-  $('bankForm').onsubmit=e=>{e.preventDefault();decide(()=>session.chooseBankLoan(Number($('bankPrincipal').value),Number($('bankInterest').value),playerId,bankId));};
+  $('bankForm').onsubmit=e=>{e.preventDefault();decide(()=>session.chooseBankLoan(Number($('bankPrincipal').value),playerId,bankId));};
   $('bankDecline').onclick=()=>decide(()=>session.declineBankLoan(playerId,bankId));
   if(!dialog.open)dialog.showModal();
  }
@@ -26,7 +28,7 @@
   $('marketProgress')?.remove();$('marketQuoteTable')?.remove();$('futuresLotLabel')?.remove();
   if(session.isMarketCard(c)){session.beginMarket();showMarket(c);return c;}
   for(const child of $('humanActions').children)child.hidden=false;
-  $('apply').disabled=false;$('skip').textContent='放棄';
+  $('apply').disabled=false;$('eventRoll').disabled=false;$('skip').textContent='放棄';$('diceTransfer')?.remove();
   U.card(session.state,c,session.preview());setupTrade();
   $('eventRoll').closest('.event-dice').hidden=!session.requiresEventDie();
   const payment=session.mandatoryPayment();if(payment!==null){
@@ -59,6 +61,15 @@
    $('decisionTitle').textContent='出售房產';$('apply').textContent=preview.selected?'確認出售':'繼續';
    $('suggestion').textContent=preview.selected?'售價：'+U.money(preview.selected.price)+'\n清償房貸：'+U.money(preview.selected.loan)+'\n成交後現金：'+U.money(preview.remainingCash):'沒有符合本次收購條件的房產，本卡無影響。';
    if(preview.selected){const select=document.createElement('select');select.id='saleChoice';for(const a of preview.options)select.append(new Option(a.name,a.id));select.value=preview.selected.id;select.onchange=()=>{session.state.pending.saleAssetId=select.value;showPending();};$('humanActions').prepend(select);}
+  }else if(preview?.kind==='employment-exempt'){
+   $('suggestion').textContent=preview.message;$('apply').textContent='繼續';$('skip').hidden=true;
+  }else if(preview?.kind==='dice-event'){
+   $('suggestion').textContent=preview.message;$('apply').hidden=false;$('apply').disabled=!!preview.waitingDice;
+   $('apply').textContent=preview.waitingDecision?'確認參與'+(preview.cost?'並支付 '+U.money(preview.cost)+' 元':''):preview.salePending?'確認出售':preview.review?'記錄待處理並繼續':'確認結果';
+   $('skip').hidden=!(preview.waitingDecision||preview.salePending&&c.resolver.optional);
+   $('eventRoll').disabled=!preview.waitingDice;$('eventRoll').textContent='擲事件骰（'+(session.state.pending.eventRolls?.length||0)+' / '+c.resolver.dice+'）';
+   if(preview.transfer&&preview.waitingDecision){const select=document.createElement('select');select.id='diceTransfer';for(const p of session.state.players.filter(GameData.play.market.live))select.append(new Option(p.name+(p.id===session.active.id?'（自己接受）':'（轉讓）'),p.id));select.value=session.active.id;$('humanActions').prepend(select);}
+   if(preview.salePending&&!c.resolver.all){const select=document.createElement('select');select.id='saleChoice';for(const a of session.diceProperties(c))select.append(new Option(a.name,a.id));select.value=session.state.pending.saleAssetId||select.options[0]?.value;select.onchange=()=>{session.state.pending.saleAssetId=select.value;persist();};$('humanActions').prepend(select);}
   }else if(preview?.kind==='state-auto'){
    $('suggestion').textContent=preview.message;$('apply').textContent='確認結算';$('apply').disabled=!!preview.waitingDice||!!preview.waitingChildLimit;
    $('skip').hidden=true;$('eventRoll').disabled=!preview.waitingDice;
@@ -167,6 +178,7 @@
      else if(session.marketPhase){if(!await driveMarket())break;}
      else{
      const c=showPending();await wait(800);if(paused)break;
+     if(session.preview()?.waitingDecision){if(session.investmentFunding()?.canAfford!==false)session.acceptDice();else{session.skip();persist();continue;}}
      while(session.preview()?.waitingDice)session.rollEventDie();
      const decision=ComputerPlayers.decide(session.active,session.preview());
      try{if(c&&['buy','apply'].includes(decision.action))session.apply();else session.skip();}catch(e){logger({code:'AI_FALLBACK',text:e.message});session.skip();}
@@ -202,13 +214,13 @@
  $('tradePlus').onclick=()=>{$('tradeUnits').value=Math.min(Number($('tradeUnits').max),Number($('tradeUnits').value)+1);quoteTrade();};
  $('tradeForm').onsubmit=e=>{e.preventDefault();if(busy||session.trader?.personality!=='human')return;try{const q=session.executeMarket($('tradeItem').value,Number($('tradeUnits').value),$('tradeSide').value,session.trader.id,session.marketPhase.id,$('futuresLot')?.value||null);persist();render();U.account(session.state);if(q.side==='sell')populateTrade();else quoteTrade();$('cardError').textContent=(q.side==='buy'?'買進':'賣出')+'完成：'+q.name+' × '+q.units+'，'+(q.side==='buy'?'扣款':'現金變動')+U.money(q.amount)+' 元；目前現金 '+U.money(q.remainingCash)+' 元。';}catch(err){fail(err);}};
  $('tradeDone').onclick=async()=>{if(busy||(session.trader||session.triggerPlayer)?.personality!=='human')return;busy=true;try{if(session.trader)session.completeMarket(session.trader.id,session.marketPhase.id);else session.acknowledgeMarket();persist();if(await driveMarket())await afterResolution();}catch(e){busy=false;fail(e);render();}};
- $('eventRoll').onclick=async()=>{
+ $('eventRoll').onclick=()=>{
   if(busy||session.state.turn!==0)return;busy=true;
   const buttons=[...$('humanActions').querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);
-  try{const value=session.rollEventDie();persist();$('eventDie').classList.add('rolling');$('eventDiceResult').textContent='事件骰擲骰中…';await wait(450);$('eventDie').textContent=['⚀','⚁','⚂','⚃','⚄','⚅'][value-1];$('eventDiceResult').textContent='本次 '+value+' 點 · 已擲點數：'+session.state.pending.eventRolls.join('、');render();}
+  try{session.rollEventDie();persist();render();}
   catch(e){fail(e);}finally{$('eventDie').classList.remove('rolling');buttons.forEach(b=>b.disabled=false);busy=false;showPending();}
  };
- $('apply').onclick=async()=>{if(!session.preview()){$('manualForm').hidden=false;$('manualAmount').focus();return;}await act(()=>session.apply())();};
+ $('apply').onclick=async()=>{if(busy)return;if(session.preview()?.waitingDecision){try{session.acceptDice(Number($('diceTransfer')?.value??session.active.id));persist();showPending();render();}catch(e){fail(e);}return;}if(!session.preview()){$('manualForm').hidden=false;$('manualAmount').focus();return;}await act(()=>session.apply())();};
  $('skip').onclick=act(()=>session.skip());$('manualToggle').onclick=()=>{$('manualForm').hidden=!$('manualForm').hidden;if(!$('manualForm').hidden)$('manualAmount').focus();};
  $('manualForm').onsubmit=act(()=>session.manual({[$('manualField').value]:Number($('manualAmount').value)}));
  $('loanForm').onsubmit=e=>{e.preventDefault();try{session.borrow(Number($('loanAmount').value),Number($('loanInterest').value));persist();render();$('cardError').textContent='借款已記錄，請選擇購買或略過。';}catch(err){fail(err);}};

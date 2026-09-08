@@ -176,9 +176,10 @@
    }
   }
   for(const effect of market.playerSpecificEffect)for(const p of drafts.filter(live)){
+   if(this.byId.get(p.characterId)?.effective?.fields?.industry==='無產業')continue;
    const industry=p.employment?.industry||p.employmentIndustry||p.industry||this.byId.get(p.characterId)?.effective?.fields?.industry||items.find(i=>i.asset==='stocks'&&(p.occupation||'').startsWith(i.name+'公司'))?.name;
    if(!industry){market.issues.push(p.name+' 未記錄任職產業，無法判定 '+effect.industry+' 員工條件。');continue;}
-   if(industry!==effect.industry)continue;
+   if(industry.replace(/業$/,'')!==effect.industry.replace(/業$/,''))continue;
    if(effect.highestRankExempt&&typeof p.employment?.isHighestRank!=='boolean'){market.issues.push(p.name+' 的最高階職位條件未記錄，未套用失業。');continue;}
    if(effect.highestRankExempt&&p.employment.isHighestRank)continue;
    p.employment={...p.employment,industry,unemployed:true,previousSalary:p.employment?.previousSalary??p.salaryIncome};

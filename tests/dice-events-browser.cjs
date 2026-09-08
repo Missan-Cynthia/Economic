@@ -1,0 +1,17 @@
+'use strict';
+const assert=require('node:assert/strict'),path=require('node:path'),{pathToFileURL}=require('node:url'),{session}=require('./dice-events.cjs');
+(async()=>{const {chromium}=require(process.env.PLAYWRIGHT_PACKAGE||'playwright'),browser=await chromium.launch({channel:'msedge',headless:true}),errors=[];try{
+ for(const viewport of [{width:390,height:844},{width:844,height:390},{width:1440,height:900}])for(const [id,count,die] of [['investment-opportunity-001',1,1],['daily-life-059',2,6],['daily-life-075',3,1]]){
+  const s=session(id,[die]),p=await browser.newPage({viewport,isMobile:viewport.width!==1440,hasTouch:true,reducedMotion:'reduce'});p.on('pageerror',e=>errors.push(e.message));
+  await p.addInitScript(({state,die})=>{if(!localStorage.getItem('miss-an-finance-game-v1'))localStorage.setItem('miss-an-finance-game-v1',JSON.stringify(state));Math.random=()=>(die-1)/6;},{state:s.state,die});
+  await p.goto(process.env.GAME_TEST_URL||pathToFileURL(path.resolve(__dirname,'../index.html')).href);await p.locator('#continue').tap();assert.equal(await p.locator('#rotate').isVisible(),false);
+  if(id!=='daily-life-059'){assert.equal(await p.locator('#eventRoll').isDisabled(),true);await p.locator('#apply').tap();const paid=await p.evaluate(()=>JSON.parse(localStorage.getItem('miss-an-finance-game-v1')).players[0].cash);assert.equal(paid,id==='daily-life-075'?999000:900000);await p.reload();await p.locator('#continue').tap();}
+  for(let i=0;i<count;i++){await p.locator('#eventRoll').tap();const saved=await p.evaluate(()=>JSON.parse(localStorage.getItem('miss-an-finance-game-v1')));assert.equal(saved.pending.eventRolls.length,i+1);assert.equal(saved.pending.eventRolls[i],die);}
+  assert.equal(await p.locator('#eventRoll').isDisabled(),true);assert.equal(await p.locator('#apply').isDisabled(),false);assert.equal(await p.locator('#skip').isVisible(),false);
+  if(viewport.width===390&&count===1)await p.screenshot({path:path.join(__dirname,'dice-mobile.png')});
+  await p.reload();await p.locator('#continue').tap();assert.equal(await p.locator('#eventRoll').isDisabled(),true);await p.locator('#apply').tap();
+  const result=await p.evaluate(()=>JSON.parse(localStorage.getItem('miss-an-finance-game-v1')));assert.equal(result.players[0].cash,id==='investment-opportunity-001'?1100000:id==='daily-life-059'?988000:1999000);assert.equal(result.events.filter(e=>e.code==='DICE_RESULT').length,1);await p.close();
+ }
+ const ready=session('daily-life-059');ready.state.phase='ready';ready.state.pending=null;const p=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true,reducedMotion:'reduce'});p.on('pageerror',e=>errors.push(e.message));await p.addInitScript(state=>{localStorage.setItem('miss-an-finance-game-v1',JSON.stringify(state));Math.random=()=>0;},ready.state);await p.goto(process.env.GAME_TEST_URL||pathToFileURL(path.resolve(__dirname,'../index.html')).href);await p.locator('#continue').tap();await p.locator('#roll').tap();await p.waitForFunction(()=>JSON.parse(localStorage.getItem('miss-an-finance-game-v1')).events.some(e=>e.code==='ROLL'));await p.close();
+ assert.deepEqual(errors,[]);console.log('PASS: desktop and mobile portrait/landscape touch, animation disabled, board roll, exact dice counts, prepaid restore, immediate payout, no reroll or duplicate settlement');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exitCode=1;});

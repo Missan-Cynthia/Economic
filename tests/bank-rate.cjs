@@ -1,0 +1,9 @@
+'use strict';
+const assert=require('node:assert/strict'),{session}=require('./bank.cjs'),E=require('../data/game-engine.js'),B=require('../js/board.js');
+for(const [random,rate] of [[0,2],[.249999,2],[.25,3],[.5,4],[.75,5],[.999999,5]]){
+ const s=session();s.state.phase='resolving';s.state.pending={kind:'bank',tileId:'taiwan-16'};let draws=0;s.rng=()=>{draws++;return random;};s.beginBank();assert.equal(s.bankPhase.annualRate,rate);assert.equal(draws,1);s.beginBank();s.drawBankRate();assert.equal(draws,1);
+ assert.deepEqual(s.bankLoanQuote(300000),{principal:300000,annualRate:rate,monthlyPayment:300000*rate/1200});const cash=s.active.cash;s.chooseBankLoan(300000);assert.equal(s.active.cash,cash+300000);assert.equal(s.active.liabilities.loans[0].annualRate,rate);assert.equal(s.active.liabilities.loans[0].monthlyPayment,300000*rate/1200);
+ const restored=new E.play.Session(s.cards,B,()=>{throw Error('must not redraw');},s.state);assert.equal(restored.bankPhase.annualRate,rate);restored.chooseBankLoan(100000);assert.equal(restored.state.players[1].liabilities.loans[0].monthlyPayment,Math.round(100000*rate/12)/100);restored.declineBankLoan();restored.declineBankLoan();assert.equal(restored.state.lastBank.annualRate,rate);assert.equal(restored.state.events.filter(e=>e.code==='BANK_RATE').length,1);
+}
+const old=session();old.roll();delete old.bankPhase.annualRate;old.state.players[0].liabilities.loans.push({id:'legacy',principal:100000,monthlyPayment:1234});const restored=new E.play.Session(old.cards,B,()=>.75,old.state);assert.equal(restored.bankPhase.annualRate,5);assert.equal(restored.state.players[0].liabilities.loans[0].monthlyPayment,1234);const again=new E.play.Session(old.cards,B,()=>{throw Error('must not redraw');},restored.state);assert.equal(again.bankPhase.annualRate,5);
+console.log('PASS: 2–5% rate boundaries, one draw per visit, automatic monthly interest, rate locked on loans, restore and legacy migration');

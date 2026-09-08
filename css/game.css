@@ -23,3 +23,22 @@
 .tile.active{outline:3px solid #cb9e32;outline-offset:-3px;background:#fff1bd;box-shadow:none;z-index:2}
 .pawn{width:clamp(12px,3cqh,18px);height:clamp(12px,3cqh,18px);border-radius:50%;font-size:clamp(8px,1.8cqh,11px);line-height:1.2;transform:translate(-50%,-50%);box-shadow:0 1px 3px #254b4866}
 .pawn:before{display:none}
+/* Touch controls remain usable in portrait and without animation. */
+@media(orientation:portrait) and (max-width:900px){#rotate{display:none}body{overflow:auto}.game{height:auto;min-height:100dvh;grid-template-columns:1fr}.board-side{min-height:70vh}.sidebar{min-height:45vh}.welcome{grid-template-columns:1fr}.hero{display:none}.card-layout{grid-template-columns:minmax(0,1fr)}#cardDialog{width:94vw;max-height:94dvh;padding:16px}.card-actions{min-width:0}.drawn-card{max-height:45vh;overflow:auto}.roles{grid-template-columns:repeat(2,1fr)}}
+#eventRoll,#roll{touch-action:manipulation;min-height:44px}.event-dice{position:relative}.event-dice button{position:relative;z-index:1}
+/* Keep Safari text sizing from enlarging labels beyond their cells. */
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+.tile,.tile.world{overflow:hidden;flex-shrink:0}.tile b,.tile span{flex-shrink:0}
+@media(max-width:900px),(hover:none) and (pointer:coarse){
+ .game{height:auto;min-height:100dvh;grid-template-columns:1fr;overflow:visible}
+ .board-side{min-height:0;overflow:visible}.sidebar{min-height:440px;overflow:visible}
+ .ocean{display:block;container-type:normal;overflow:auto;height:min(82svh,760px);min-height:360px;padding:12px;touch-action:pan-x pan-y pinch-zoom;-webkit-overflow-scrolling:touch}
+ .board{width:720px;height:720px;aspect-ratio:1;margin:0 auto;flex:none}
+ .tile,.tile.world{font-size:14px;line-height:1.15;padding:2px;gap:2px}
+ .tile b,.tile.world b{font-size:19px;line-height:1}
+ .island-title{font-size:22px}.island-title span{font-size:12px}.world-title{font-size:15px}
+ .pawn{width:21px;height:21px;font-size:13px}.board-caption{display:none}
+ .legend{flex-wrap:wrap}.legend:after{content:'滑動棋盤查看內外圈';font-size:12px;color:#36534b}
+}
+@media(max-width:900px),(hover:none) and (pointer:coarse){#drawnCard{position:static}.card-layout{align-content:start}}
+@media(max-width:900px),(hover:none) and (pointer:coarse){.game{grid-template-columns:minmax(0,1fr)}.board-side,.ocean,.sidebar{min-width:0;max-width:100%}}

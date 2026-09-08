@@ -13,6 +13,6 @@
   }
   return list.map((type,i)=>{const [x,y,width,height]=rects[i];return {id:zone+'-'+i,zone,type,label:types[type][0],icon:types[type][1],position:{x:x+width/2,y:y+height/2},size:{width,height},cardPool:types[type][2]?{gameModule:types[type][2],excludeCardTypes:['character'],highValue:zone==='world'}:null,effect:{kind:type==='childbirth'?'childbirth':type==='bank'?'bank':type==='cashflow'?'pay-cashflow':type==='start'?'start':'draw-card'}};});
  }
- const api={spaces:[...spaces(inner,'taiwan',23,9),...spaces(outer,'world',2,10)],settings:{maxChildren:3,diceSides:6,worldInvestmentMinimum:1000000,payOnPassStart:true,negativeCashPolicy:'保留現金缺口，不自動創造貸款；可人工借貸或繼續回合'},rules:['使用一顆六面骰；每人一次移動為一回合。','通過或抵達起點領取一次月現金流；停在現金流格再結算一次。','內外圈都有銀行格；生小孩格只在內圈。','持續性收入大於總支出後進入世界圈，世界圈優先提供百萬元以上投資。','未明確的貸款利率、技能與事件由真人輸入；電腦無法判斷便略過。'],zone:z=>api.spaces.filter(s=>s.zone===z)};
+ const api={spaces:[...spaces(inner,'taiwan',23,9),...spaces(outer,'world',2,10)],settings:{maxChildren:3,diceSides:6,worldInvestmentMinimum:1000000,payOnPassStart:true,negativeCashPolicy:'保留現金缺口，不自動創造貸款；可人工借貸或繼續回合'},rules:['使用一顆六面骰；每人一次移動為一回合。','通過或抵達起點領取一次月現金流；停在現金流格再結算一次。','內外圈都有銀行格；生小孩格只在內圈。','持續性收入大於總支出後進入世界圈，世界圈優先提供百萬元以上投資。','銀行每次抽出 2%、3%、4% 或 5% 年利率，再由全體玩家決定貸款本金；每月利息自動計算。'],zone:z=>api.spaces.filter(s=>s.zone===z)};
  if(typeof module==='object')module.exports=api;else root.BoardData=api;
 })(globalThis);
